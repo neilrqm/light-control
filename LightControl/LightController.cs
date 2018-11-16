@@ -4,7 +4,9 @@ using Q42.HueApi.Models.Bridge;
 using Q42.HueApi.Models.Groups;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text;
 using System.Timers;
 
 namespace LightControl
@@ -17,7 +19,9 @@ namespace LightControl
         private LocatedBridge bridge;
         private Queue<Command> dispatchQueue = new Queue<Command>();
         private Timer dispatchTimer;
-        List<Ramp> ramps = new List<Ramp>();
+        private List<Ramp> ramps = new List<Ramp>();
+
+        internal static BridgeSimulator Simulator { get; private set; }
 
         /// <summary>
         /// Initialize the light controller.
@@ -28,6 +32,11 @@ namespace LightControl
         {
             this.apiKey = apiKey;
             this.dispatchPeriod = dispatchPeriod;
+
+            if (File.Exists("simulate.log"))
+            {
+                Simulator = new BridgeSimulator("simulate.log");
+            }
 
             // we dispatch messages based on a timer so that we don't send them too fast
             dispatchTimer = new Timer(dispatchPeriod);
@@ -41,6 +50,7 @@ namespace LightControl
                 ConnectionFailed?.Invoke(this, new EventArgs());
                 return;
             }
+            dispatchTimer.Start();
         }
 
         /// <summary>
@@ -49,6 +59,11 @@ namespace LightControl
         internal async void Connect()
         {
             // Connect to the Philips Hue bridge.  If we ever change lights the Hue stuff can be abstracted out.
+            if (Simulator != null)
+            {
+                Simulator.Log("Connection");
+                return;
+            }
             IBridgeLocator locator = new HttpBridgeLocator();
             IEnumerable<LocatedBridge> bridges = await locator.LocateBridgesAsync(TimeSpan.FromSeconds(5));
             if (bridges == null || bridges.Count() == 0)
@@ -90,8 +105,12 @@ namespace LightControl
                     }
                     Ramp r = new Ramp(c, client);
                     r.RampDone += EndRamp;
-                    r.StartRamp();
                     ramps.Add(r);
+                    r.StartRamp();
+                }
+                else if (Simulator != null)
+                {
+                    Simulator.Log(c);
                 }
                 else
                 {
@@ -107,7 +126,14 @@ namespace LightControl
 
         internal void SendCommand(Command c)
         {
-            dispatchQueue.Enqueue(c);
+            if (c.LightIds != null)
+            {
+                dispatchQueue.Enqueue(c);
+            }
+            else
+            {
+                throw new Exception("Command must specify a collection of light IDs");
+            }
         }
 
         private void EndRamp(object sender, EventArgs e)
@@ -152,23 +178,40 @@ namespace LightControl
         internal void StartRamp()
         {
             remainingSteps = (int)command.Brightness - 1;   // assuming that we've already handled case where brightness is null
-            int period = command.Ramp * 60 * 1000 / ((int)command.Brightness - 1);
+            int period = command.Ramp * 60 * 1000 / ((int)command.Brightness - 1);  // yeah, there's some truncation error here.
             // worst case is we'll step up brightness by 253 over the course of 1 minute, which works out to
             // well over 200 ms between steps.  As long as the dispatch period is shorter than that we'll be
             // fine, but if the dispatch period is more than 200 ms (or if the minimum ramp time or brightness
             // range changes) we'll need to step by more brightness less often
             rampTimer = new Timer(period);
             rampTimer.Elapsed += Step;
-            LightCommand initMessage = new LightCommand().TurnOn(); // right now I only want to ramp on, maybe ramp off later.
-            initMessage.Brightness = 1;     // TODO: consider breaking out the initial brightness setting
-            initMessage.ColorTemperature = command.Colour;
-            client.SendCommandAsync(initMessage, command.LightIds);
+            if (LightController.Simulator == null)
+            {
+                LightCommand initMessage = new LightCommand().TurnOn(); // right now I only want to ramp on, maybe ramp off later.
+                initMessage.Brightness = 1;     // TODO: consider breaking out the initial brightness setting
+                initMessage.ColorTemperature = command.Colour;
+                client.SendCommandAsync(initMessage, command.LightIds);
+            }
+            else
+            {
+                LightController.Simulator.Log("Starting ramp.");
+                LightController.Simulator.Log(command);
+            }
+            rampTimer.Start();
         }
+
         private void Step(object sender, ElapsedEventArgs e)
         {
             LightCommand message = new LightCommand();
             message.BrightnessIncrement = 1;
-            client.SendCommandAsync(message, command.LightIds);
+            if (LightController.Simulator == null)
+            {
+                client.SendCommandAsync(message, command.LightIds);
+            }
+            else
+            {
+                LightController.Simulator.Log("Incrementing brightness in ramp.");
+            }
             remainingSteps--;
             if (remainingSteps == 0)
             {
@@ -185,7 +228,35 @@ namespace LightControl
         internal LightState LightState { get; set; }    // Valid values are Off, On, or NoChange
         internal int? Brightness { get; set; }  // Valid values are in the range 1-254, or null to leave unchanged
         internal int? Colour { get; set; }      // In mireks, valid from 500 (=2000K) down to 153 (=6500K), or null to leave unchanged
-        internal List<string> LightIds { get; private set; } = new List<string>();
+        internal List<string> LightIds { get; set; }
         internal int Ramp { get; set; } = 0;    // Brightness will ramp up from 1 to Brightness parameter over this many minutes (0 means no ramp)
+    }
+
+    class BridgeSimulator
+    {
+        private StreamWriter logFile;
+
+        internal BridgeSimulator(string path)
+        {
+            logFile = new StreamWriter(path);
+        }
+
+        internal void Log(string message)
+        {
+            logFile.WriteLine(string.Format("{0} - {1}", DateTime.Now.ToString("yy-MM-dd HH:mm:ss.fff"), message));
+            logFile.Flush();
+        }
+
+        internal void Log(Command c)
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.Append(DateTime.Now.ToString("yy-MM-dd HH:mm:ss.fff"));
+            sb.Append(" - Command: '");
+            sb.Append(string.Format("State: {0}, Bright: {1}, Colour: {2}, Ids: {3}, Ramp: {4}",
+                c.LightState, c.Brightness, c.Colour, c.LightIds, c.Ramp));
+            sb.Append("'");
+            logFile.WriteLine(sb.ToString());
+            logFile.Flush();
+        }
     }
 }
