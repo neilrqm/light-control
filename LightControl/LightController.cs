@@ -1,6 +1,7 @@
 ﻿using Q42.HueApi;
 using Q42.HueApi.Interfaces;
 using Q42.HueApi.Models.Bridge;
+using Q42.HueApi.Models.Groups;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -14,9 +15,8 @@ namespace LightControl
         private int dispatchPeriod;
         private LocalHueClient client;
         private LocatedBridge bridge;
-        private Queue<Command> dispatchQueue;
+        private Queue<Command> dispatchQueue = new Queue<Command>();
         private Timer dispatchTimer;
-        private Timer rampTimer;
         List<Ramp> ramps = new List<Ramp>();
 
         /// <summary>
@@ -58,6 +58,7 @@ namespace LightControl
             }
             bridge = bridges.ElementAt(0);
             client = new LocalHueClient(bridge.IpAddress);
+            client?.Initialize(apiKey);
             if (client != null && await client.CheckConnection())
             {
                 Connected?.Invoke(this, new EventArgs());
@@ -88,7 +89,7 @@ namespace LightControl
                         return;
                     }
                     Ramp r = new Ramp(c, client);
-                    r.RampDone += CheckRamp;
+                    r.RampDone += EndRamp;
                     r.StartRamp();
                     ramps.Add(r);
                 }
@@ -104,7 +105,12 @@ namespace LightControl
             }
         }
 
-        private void CheckRamp(object sender, EventArgs e)
+        internal void SendCommand(Command c)
+        {
+            dispatchQueue.Enqueue(c);
+        }
+
+        private void EndRamp(object sender, EventArgs e)
         {
             ramps.Remove((Ramp)sender);
         }
@@ -123,9 +129,9 @@ namespace LightControl
 
     enum LightState
     {
+        NoChange,
         Off,
         On,
-        NoChange,
     }
 
     // TODO: cancel ramp (e.g. if light switch is pressed)
@@ -136,7 +142,6 @@ namespace LightControl
         Command command;
         LocalHueClient client;
         int remainingSteps;
-        int period;
         Timer rampTimer;
 
         internal Ramp(Command c, LocalHueClient client)
