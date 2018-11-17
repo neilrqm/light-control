@@ -70,6 +70,7 @@
     <Compile Include="LightController.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Scheduler.cs" />
     <EmbeddedResource Include="LightControl.resx">
       <DependentUpon>LightControl.cs</DependentUpon>
     </EmbeddedResource>

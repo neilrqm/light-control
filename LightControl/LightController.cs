@@ -225,6 +225,15 @@ namespace LightControl
 
     class Command
     {
+        internal Command() { }
+        internal Command(Command source)
+        {
+            Brightness = source.Brightness;
+            Colour = source.Colour;
+            LightIds = new List<string>(source.LightIds);
+            LightState = source.LightState;
+            Ramp = source.Ramp;
+        }
         internal LightState LightState { get; set; }    // Valid values are Off, On, or NoChange
         internal int? Brightness { get; set; }  // Valid values are in the range 1-254, or null to leave unchanged
         internal int? Colour { get; set; }      // In mireks, valid from 500 (=2000K) down to 153 (=6500K), or null to leave unchanged
