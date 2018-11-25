@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using System.Timers;
 
 namespace LightControl
@@ -33,14 +34,10 @@ namespace LightControl
             this.apiKey = apiKey;
             this.dispatchPeriod = dispatchPeriod;
 
-            if (File.Exists("simulate.log"))
+            if (File.Exists("simulate.log"))    // this is a really dumb way to do this
             {
                 Simulator = new BridgeSimulator("simulate.log");
             }
-
-            // we dispatch messages based on a timer so that we don't send them too fast
-            dispatchTimer = new Timer(dispatchPeriod);
-            dispatchTimer.Elapsed += Dispatch;  // consider revising this to only do a full delay after sending a message
 
             ConnectionFailed += OnConnectionFailed;
             Connected += OnConnection;
@@ -50,31 +47,37 @@ namespace LightControl
                 ConnectionFailed?.Invoke(this, new EventArgs());
                 return;
             }
+
+            // we dispatch messages based on a timer so that we don't send them too fast
+            dispatchTimer = new Timer(dispatchPeriod);
+            dispatchTimer.Elapsed += Dispatch;  // consider revising this to only do a full delay after sending a message
             dispatchTimer.Start();
         }
 
         /// <summary>
         /// Connect the controller to the light bridge.
         /// </summary>
-        internal async void Connect()
+        internal async Task<bool> Connect()
         {
             // Connect to the Philips Hue bridge.  If we ever change lights the Hue stuff can be abstracted out.
             if (Simulator != null)
             {
                 Simulator.Log("Connection");
-                return;
+                return true;
             }
             IBridgeLocator locator = new HttpBridgeLocator();
             IEnumerable<LocatedBridge> bridges = await locator.LocateBridgesAsync(TimeSpan.FromSeconds(5));
             if (bridges == null || bridges.Count() == 0)
             {
                 ConnectionFailed?.Invoke(this, new EventArgs());
-                return;
+                return false;
             }
             bridge = bridges.ElementAt(0);
             client = new LocalHueClient(bridge.IpAddress);
+            // var appKey = await client.RegisterAsync("light-control", "fela");
             client?.Initialize(apiKey);
-            if (client != null && await client.CheckConnection())
+            bool connected = await client?.CheckConnection();
+            if (client != null && connected)
             {
                 Connected?.Invoke(this, new EventArgs());
             }
@@ -82,6 +85,7 @@ namespace LightControl
             {
                 ConnectionFailed?.Invoke(this, new EventArgs());
             }
+            return connected;
         }
 
         /// <summary>
@@ -147,6 +151,13 @@ namespace LightControl
         void IDisposable.Dispose()
         {
             ((IDisposable)dispatchTimer).Dispose();
+        }
+
+        internal async void Test()
+        {
+            IEnumerable<Light> lights = await client.GetLightsAsync();
+            Bridge x = await client.GetBridgeAsync();
+            IReadOnlyCollection<Q42.HueApi.Models.Sensor> sensors = await client.GetSensorsAsync();
         }
 
         internal event EventHandler ConnectionFailed;

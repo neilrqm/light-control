@@ -6,23 +6,51 @@ using System.Threading.Tasks;
 
 namespace LightControl
 {
+    /// <summary>
+    /// Translate a set of schedules defined in the config file to a sequence of events mapping commands to runtimes.
+    /// </summary>
     class Scheduler
     {
-        Dictionary<string, WeeklySchedule> schedules;
+        internal Dictionary<string, WeeklySchedule> schedules;
         WeeklySchedule activeSchedule;
+        Dictionary<string, List<string>> lightingGroups;
 
-        internal Scheduler(Dictionary<string, Schedule> configSchedules)
+        internal Scheduler(Dictionary<string, Schedule> configSchedules, Dictionary<string, List<string>> lightingGroups)
         {
+            this.lightingGroups = lightingGroups;
             UpdateConfig(configSchedules);
         }
 
         internal void UpdateConfig(Dictionary<string, Schedule> configSchedules)
         {
-            // for each schedule:
-            //   copy from inherited schedules
+            // for each config schedule:
+            //   copy from inherited config schedules
             //   create a new weekly schedule
-            //   for each schedule element:
-            //     for each day in the schedule element, add a new weekly schedule element
+            //   for each config schedule element:
+            //     for each day in the config schedule element, add a new weekly schedule element
+            schedules = new Dictionary<string, WeeklySchedule>();
+            foreach (string name in configSchedules.Keys)
+            {
+                Schedule s;
+                if (string.IsNullOrEmpty(configSchedules[name].Inherit))
+                {
+                    s = configSchedules[name];
+                }
+                else
+                {
+                    s = new Schedule(configSchedules[configSchedules[name].Inherit]);
+                    foreach (ScheduleElement e in configSchedules[name].Elements)
+                    {
+                        s.AddElement(e);
+                    }
+                }
+                schedules[name] = new WeeklySchedule();
+                foreach (ScheduleElement e in s.Elements)
+                {
+                    schedules[name].Elements.AddRange(ConfigScheduleElementToWeeklyScheduleElement(e));
+                }
+                schedules[name].Elements.Sort();
+            }
         }
 
         internal void RunSchedule(string scheduleName)
@@ -32,7 +60,49 @@ namespace LightControl
                 // error
                 return;
             }
+            activeSchedule = schedules[scheduleName];
             TriggerEvent(SecondsUntilNextRun());
+        }
+
+        private List<WeeklyScheduleElement> ConfigScheduleElementToWeeklyScheduleElement(ScheduleElement e)
+        {
+            List<WeeklyScheduleElement> elements = new List<WeeklyScheduleElement>();
+            foreach (int day in e.Days)
+            {
+                if (e.On != null)
+                {
+                    elements.Add(CreateWeeklyScheduleElement(LightState.On, e, day));
+                }
+                if (e.Off != null)
+                {
+                    elements.Add(CreateWeeklyScheduleElement(LightState.Off, e, day));
+                }
+            }
+            return elements;
+        }
+
+        private WeeklyScheduleElement CreateWeeklyScheduleElement(LightState state, ScheduleElement e, int day)
+        {
+            Command cmd = new Command();
+            cmd.LightState = state;
+            cmd.Ramp = e.Ramp;
+            cmd.LightIds = new List<string>(lightingGroups[e.Lights]);
+            WeeklyScheduleElement element = new WeeklyScheduleElement()
+            {
+                Command = cmd,
+                Name = e.Name,
+                RunTime = SecondsSinceStartOfWeek(day, (DateTime)(state == LightState.On ? e.On : e.Off))
+            };
+            return element;
+        }
+
+        private int SecondsSinceStartOfWeek(int dayOfWeek, DateTime dt)
+        {
+            int seconds = dayOfWeek * 24 * 60 * 60;
+            seconds += dt.Hour * 60 * 60;
+            seconds += dt.Minute * 60;
+            seconds += dt.Second;
+            return seconds;
         }
 
         private async void TriggerEvent(int delay)
@@ -87,7 +157,7 @@ namespace LightControl
             }
         }
         internal string Name { get; set; }
-        internal List<WeeklyScheduleElement> Elements { get; set; }
+        internal List<WeeklyScheduleElement> Elements { get; set; } = new List<WeeklyScheduleElement>();
     }
 
     class WeeklyScheduleElement : IComparable
