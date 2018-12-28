@@ -1,7 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
 
 namespace LightControl
@@ -14,11 +12,13 @@ namespace LightControl
         internal Dictionary<string, WeeklySchedule> schedules;
         WeeklySchedule activeSchedule;
         Dictionary<string, List<string>> lightingGroups;
+        private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
         internal Scheduler(Dictionary<string, Schedule> configSchedules, Dictionary<string, List<string>> lightingGroups)
         {
             this.lightingGroups = lightingGroups;
             UpdateConfig(configSchedules);
+            log.Info("Loaded schedules.");
         }
 
         internal void UpdateConfig(Dictionary<string, Schedule> configSchedules)
@@ -58,8 +58,10 @@ namespace LightControl
             if (!schedules.ContainsKey(scheduleName))
             {
                 // error
+                log.ErrorFormat("Couldn't find schedule {0}.", scheduleName);
                 return;
             }
+            log.Info(string.Format("Starting schedule '{0}'.", scheduleName));
             activeSchedule = schedules[scheduleName];
             TriggerEvent(SecondsUntilNextRun());
         }
@@ -107,9 +109,22 @@ namespace LightControl
 
         private async void TriggerEvent(int delay)
         {
+            log.InfoFormat("Triggering next event in {0} seconds.", delay);
             await Task.Delay(delay * 1000);
             // process events that are supposed to run at this time
             // do we need to mark the processed events so that SecondsUntilNextRun doesn't find them?  I don't think so but maybe.
+            int seconds = TimeSinceStartOfWeek();
+            foreach (WeeklyScheduleElement e in activeSchedule.Elements)
+            {
+                if (e.RunTime == seconds)
+                {
+                    log.InfoFormat("Triggering event on {0} - '{1}'.", e.Name, e.Command);
+                }
+                else if (e.RunTime > seconds)
+                {
+                    break;
+                }
+            }
             TriggerEvent(SecondsUntilNextRun());
         }
 

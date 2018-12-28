@@ -15,6 +15,17 @@ namespace LightControl
         public LightControl()
         {
             InitializeComponent();
+            Start();
+        }
+
+        private async void Start()
+        {
+            Config cfg = new Config("../../config.yml");
+            //LightController lc = new LightController(cfg.ApiKey, cfg.DispatchPeriod);
+            //await lc.Connect();
+            //lc.Test();
+            Scheduler scheduler = new Scheduler(cfg.Schedules, cfg.Groups);
+            scheduler.RunSchedule(scheduler.Schedules[0]);
         }
     }
 }
