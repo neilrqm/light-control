@@ -4,15 +4,19 @@ using System.Threading.Tasks;
 
 namespace LightControl
 {
+    delegate void ScheduleExpired(object src, SchedulerEventArgs e);
+
     /// <summary>
     /// Translate a set of schedules defined in the config file to a sequence of events mapping commands to runtimes.
     /// </summary>
     class Scheduler
     {
         internal Dictionary<string, WeeklySchedule> schedules;
-        WeeklySchedule activeSchedule;
-        Dictionary<string, List<string>> lightingGroups;
+        private WeeklySchedule activeSchedule;
+        private Dictionary<string, List<string>> lightingGroups;
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
+
+        internal event ScheduleExpired ScheduleExpired;
 
         internal Scheduler(Dictionary<string, Schedule> configSchedules, Dictionary<string, List<string>> lightingGroups)
         {
@@ -69,6 +73,10 @@ namespace LightControl
         private List<WeeklyScheduleElement> ConfigScheduleElementToWeeklyScheduleElement(ScheduleElement e)
         {
             List<WeeklyScheduleElement> elements = new List<WeeklyScheduleElement>();
+            if (e.Days ==null)
+            {
+                // error
+            }
             foreach (int day in e.Days)
             {
                 if (e.On != null)
@@ -85,10 +93,16 @@ namespace LightControl
 
         private WeeklyScheduleElement CreateWeeklyScheduleElement(LightState state, ScheduleElement e, int day)
         {
-            Command cmd = new Command();
-            cmd.LightState = state;
-            cmd.Ramp = e.Ramp;
-            cmd.LightIds = new List<string>(lightingGroups[e.Lights]);
+            Command cmd = new Command()
+            {
+                LightState = state,
+                Ramp = e.Ramp,
+                LightIds = new List<string>(lightingGroups[e.Lights])
+            };
+            if (cmd.Ramp != 0)
+            {
+                cmd.Brightness = 254;
+            }
             WeeklyScheduleElement element = new WeeklyScheduleElement()
             {
                 Command = cmd,
@@ -119,6 +133,7 @@ namespace LightControl
                 if (e.RunTime == seconds)
                 {
                     log.InfoFormat("Triggering event on {0} - '{1}'.", e.Name, e.Command);
+                    ScheduleExpired?.Invoke(this, new SchedulerEventArgs(e.Command));
                 }
                 else if (e.RunTime > seconds)
                 {
@@ -199,6 +214,15 @@ namespace LightControl
             if (RunTime > other.RunTime) return 1;
             if (RunTime < other.RunTime) return -1;
             return 0;
+        }
+    }
+
+    internal class SchedulerEventArgs : EventArgs
+    {
+        internal Command Command { get; set; }
+        internal SchedulerEventArgs(Command command)
+        {
+            Command = command;
         }
     }
 }

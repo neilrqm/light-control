@@ -23,6 +23,7 @@ namespace LightControl
         private List<Ramp> ramps = new List<Ramp>();
 
         internal static BridgeSimulator Simulator { get; private set; }
+        private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
         /// <summary>
         /// Initialize the light controller.
@@ -100,14 +101,14 @@ namespace LightControl
             if (dispatchQueue.Count > 0)    // this should be the only consumer, so no locking needed
             {
                 Command c = dispatchQueue.Dequeue();
-                if (c.Ramp != 0)
+                if (c.Ramp != 0 && c.LightState == LightState.On)
                 {
                     if (c.Brightness == null)
                     {
                         // TODO: error
                         return;
                     }
-                    Ramp r = new Ramp(c, client);
+                    Ramp r = new Ramp(c, this);
                     r.RampDone += EndRamp;
                     ramps.Add(r);
                     r.StartRamp();
@@ -155,6 +156,7 @@ namespace LightControl
 
         internal async void Test()
         {
+            await Connect();
             IEnumerable<Light> lights = await client.GetLightsAsync();
             Bridge x = await client.GetBridgeAsync();
             IReadOnlyCollection<Q42.HueApi.Models.Sensor> sensors = await client.GetSensorsAsync();
@@ -177,19 +179,30 @@ namespace LightControl
     class Ramp
     {
         Command command;
-        LocalHueClient client;
+        LightController controller;
         int remainingSteps;
         Timer rampTimer;
+        int brightnessTarget;
+        int rampDuration;
+        private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
-        internal Ramp(Command c, LocalHueClient client)
+        internal Ramp(Command c, LightController controller)
         {
-            command = c;
-            this.client = client;
+            command = new Command()
+            {
+                Colour = c.Colour,
+                LightIds = c.LightIds,
+                LightState = LightState.On,
+                Brightness = 1
+            };
+            rampDuration = c.Ramp;
+            brightnessTarget = (int)c.Brightness;
+            this.controller = controller;
         }
         internal void StartRamp()
         {
-            remainingSteps = (int)command.Brightness - 1;   // assuming that we've already handled case where brightness is null
-            int period = command.Ramp * 60 * 1000 / ((int)command.Brightness - 1);  // yeah, there's some truncation error here.
+            remainingSteps = brightnessTarget - 1;   // assuming that we've already handled case where brightness is null
+            int period = (rampDuration * 60 * 1000 - 2000) / remainingSteps;  // Not sure what the deal is with the 2 second offset, but it seems to be needed.
             // worst case is we'll step up brightness by 253 over the course of 1 minute, which works out to
             // well over 200 ms between steps.  As long as the dispatch period is shorter than that we'll be
             // fine, but if the dispatch period is more than 200 ms (or if the minimum ramp time or brightness
@@ -198,26 +211,26 @@ namespace LightControl
             rampTimer.Elapsed += Step;
             if (LightController.Simulator == null)
             {
-                LightCommand initMessage = new LightCommand().TurnOn(); // right now I only want to ramp on, maybe ramp off later.
-                initMessage.Brightness = 1;     // TODO: consider breaking out the initial brightness setting
-                initMessage.ColorTemperature = command.Colour;
-                client.SendCommandAsync(initMessage, command.LightIds);
+                command.LightState = LightState.On;
+                command.Brightness = 1;
+                controller.SendCommand(new Command(command));
             }
             else
             {
                 LightController.Simulator.Log("Starting ramp.");
                 LightController.Simulator.Log(command);
             }
+            log.Debug(string.Format("Starting ramp with period {0}.", period));
             rampTimer.Start();
         }
 
         private void Step(object sender, ElapsedEventArgs e)
         {
-            LightCommand message = new LightCommand();
-            message.BrightnessIncrement = 1;
+            command.Brightness++;
             if (LightController.Simulator == null)
             {
-                client.SendCommandAsync(message, command.LightIds);
+                controller.SendCommand(new Command(command));
+                log.Debug("Incrementing brightness.");
             }
             else
             {
@@ -226,6 +239,7 @@ namespace LightControl
             remainingSteps--;
             if (remainingSteps == 0)
             {
+                log.Debug("Stopping ramp.");
                 rampTimer.Stop();
                 rampTimer.Close();
                 RampDone?.Invoke(this, new EventArgs());
