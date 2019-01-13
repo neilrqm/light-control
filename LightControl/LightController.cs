@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using System.Timers;
 
 namespace LightControl
@@ -22,6 +23,7 @@ namespace LightControl
         private List<Ramp> ramps = new List<Ramp>();
 
         internal static BridgeSimulator Simulator { get; private set; }
+        private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
         /// <summary>
         /// Initialize the light controller.
@@ -33,14 +35,10 @@ namespace LightControl
             this.apiKey = apiKey;
             this.dispatchPeriod = dispatchPeriod;
 
-            if (File.Exists("simulate.log"))
+            if (File.Exists("simulate.log"))    // this is a really dumb way to do this
             {
                 Simulator = new BridgeSimulator("simulate.log");
             }
-
-            // we dispatch messages based on a timer so that we don't send them too fast
-            dispatchTimer = new Timer(dispatchPeriod);
-            dispatchTimer.Elapsed += Dispatch;  // consider revising this to only do a full delay after sending a message
 
             ConnectionFailed += OnConnectionFailed;
             Connected += OnConnection;
@@ -50,31 +48,37 @@ namespace LightControl
                 ConnectionFailed?.Invoke(this, new EventArgs());
                 return;
             }
+
+            // we dispatch messages based on a timer so that we don't send them too fast
+            dispatchTimer = new Timer(dispatchPeriod);
+            dispatchTimer.Elapsed += Dispatch;  // consider revising this to only do a full delay after sending a message
             dispatchTimer.Start();
         }
 
         /// <summary>
         /// Connect the controller to the light bridge.
         /// </summary>
-        internal async void Connect()
+        internal async Task<bool> Connect()
         {
             // Connect to the Philips Hue bridge.  If we ever change lights the Hue stuff can be abstracted out.
             if (Simulator != null)
             {
                 Simulator.Log("Connection");
-                return;
+                return true;
             }
             IBridgeLocator locator = new HttpBridgeLocator();
             IEnumerable<LocatedBridge> bridges = await locator.LocateBridgesAsync(TimeSpan.FromSeconds(5));
             if (bridges == null || bridges.Count() == 0)
             {
                 ConnectionFailed?.Invoke(this, new EventArgs());
-                return;
+                return false;
             }
             bridge = bridges.ElementAt(0);
             client = new LocalHueClient(bridge.IpAddress);
+            // var appKey = await client.RegisterAsync("light-control", "fela");
             client?.Initialize(apiKey);
-            if (client != null && await client.CheckConnection())
+            bool connected = await client?.CheckConnection();
+            if (client != null && connected)
             {
                 Connected?.Invoke(this, new EventArgs());
             }
@@ -82,6 +86,7 @@ namespace LightControl
             {
                 ConnectionFailed?.Invoke(this, new EventArgs());
             }
+            return connected;
         }
 
         /// <summary>
@@ -96,14 +101,14 @@ namespace LightControl
             if (dispatchQueue.Count > 0)    // this should be the only consumer, so no locking needed
             {
                 Command c = dispatchQueue.Dequeue();
-                if (c.Ramp != 0)
+                if (c.Ramp != 0 && c.LightState == LightState.On)
                 {
                     if (c.Brightness == null)
                     {
                         // TODO: error
                         return;
                     }
-                    Ramp r = new Ramp(c, client);
+                    Ramp r = new Ramp(c, this);
                     r.RampDone += EndRamp;
                     ramps.Add(r);
                     r.StartRamp();
@@ -149,6 +154,14 @@ namespace LightControl
             ((IDisposable)dispatchTimer).Dispose();
         }
 
+        internal async void Test()
+        {
+            await Connect();
+            IEnumerable<Light> lights = await client.GetLightsAsync();
+            Bridge x = await client.GetBridgeAsync();
+            IReadOnlyCollection<Q42.HueApi.Models.Sensor> sensors = await client.GetSensorsAsync();
+        }
+
         internal event EventHandler ConnectionFailed;
         internal event EventHandler Connected;
     }
@@ -166,19 +179,30 @@ namespace LightControl
     class Ramp
     {
         Command command;
-        LocalHueClient client;
+        LightController controller;
         int remainingSteps;
         Timer rampTimer;
+        int brightnessTarget;
+        int rampDuration;
+        private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
-        internal Ramp(Command c, LocalHueClient client)
+        internal Ramp(Command c, LightController controller)
         {
-            command = c;
-            this.client = client;
+            command = new Command()
+            {
+                Colour = c.Colour,
+                LightIds = c.LightIds,
+                LightState = LightState.On,
+                Brightness = 1
+            };
+            rampDuration = c.Ramp;
+            brightnessTarget = (int)c.Brightness;
+            this.controller = controller;
         }
         internal void StartRamp()
         {
-            remainingSteps = (int)command.Brightness - 1;   // assuming that we've already handled case where brightness is null
-            int period = command.Ramp * 60 * 1000 / ((int)command.Brightness - 1);  // yeah, there's some truncation error here.
+            remainingSteps = brightnessTarget - 1;   // assuming that we've already handled case where brightness is null
+            int period = (rampDuration * 60 * 1000 - 2000) / remainingSteps;  // Not sure what the deal is with the 2 second offset, but it seems to be needed.
             // worst case is we'll step up brightness by 253 over the course of 1 minute, which works out to
             // well over 200 ms between steps.  As long as the dispatch period is shorter than that we'll be
             // fine, but if the dispatch period is more than 200 ms (or if the minimum ramp time or brightness
@@ -187,26 +211,26 @@ namespace LightControl
             rampTimer.Elapsed += Step;
             if (LightController.Simulator == null)
             {
-                LightCommand initMessage = new LightCommand().TurnOn(); // right now I only want to ramp on, maybe ramp off later.
-                initMessage.Brightness = 1;     // TODO: consider breaking out the initial brightness setting
-                initMessage.ColorTemperature = command.Colour;
-                client.SendCommandAsync(initMessage, command.LightIds);
+                command.LightState = LightState.On;
+                command.Brightness = 1;
+                controller.SendCommand(new Command(command));
             }
             else
             {
                 LightController.Simulator.Log("Starting ramp.");
                 LightController.Simulator.Log(command);
             }
+            log.Debug(string.Format("Starting ramp with period {0}.", period));
             rampTimer.Start();
         }
 
         private void Step(object sender, ElapsedEventArgs e)
         {
-            LightCommand message = new LightCommand();
-            message.BrightnessIncrement = 1;
+            command.Brightness++;
             if (LightController.Simulator == null)
             {
-                client.SendCommandAsync(message, command.LightIds);
+                controller.SendCommand(new Command(command));
+                log.Debug("Incrementing brightness.");
             }
             else
             {
@@ -215,6 +239,7 @@ namespace LightControl
             remainingSteps--;
             if (remainingSteps == 0)
             {
+                log.Debug("Stopping ramp.");
                 rampTimer.Stop();
                 rampTimer.Close();
                 RampDone?.Invoke(this, new EventArgs());
@@ -225,6 +250,15 @@ namespace LightControl
 
     class Command
     {
+        internal Command() { }
+        internal Command(Command source)
+        {
+            Brightness = source.Brightness;
+            Colour = source.Colour;
+            LightIds = new List<string>(source.LightIds);
+            LightState = source.LightState;
+            Ramp = source.Ramp;
+        }
         internal LightState LightState { get; set; }    // Valid values are Off, On, or NoChange
         internal int? Brightness { get; set; }  // Valid values are in the range 1-254, or null to leave unchanged
         internal int? Colour { get; set; }      // In mireks, valid from 500 (=2000K) down to 153 (=6500K), or null to leave unchanged
