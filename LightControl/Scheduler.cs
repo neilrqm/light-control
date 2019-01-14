@@ -97,7 +97,9 @@ namespace LightControl
             {
                 LightState = state,
                 Ramp = e.Ramp,
-                LightIds = new List<string>(lightingGroups[e.Lights])
+                LightIds = new List<string>(lightingGroups[e.Lights]),
+                Brightness = e.Brightness,
+                Colour = e.Colour
             };
             if (cmd.Ramp != 0)
             {

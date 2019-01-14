@@ -119,11 +119,13 @@ namespace LightControl
                 }
                 else
                 {
-                    LightCommand command = new LightCommand();
-                    // command.On is true to turn the light on, false to turn the light off, and null to leave the state unchanged.
-                    command.On = c.LightState == LightState.On ? true : c.LightState == LightState.Off ? false : (bool?)null;
-                    command.Brightness = (byte?)c.Brightness;
-                    command.ColorTemperature = c.Colour;
+                    LightCommand command = new LightCommand()
+                    {
+                        // command.On is true to turn the light on, false to turn the light off, and null to leave the state unchanged.
+                        On = c.LightState == LightState.On ? true : c.LightState == LightState.Off ? false : (bool?)null,
+                        Brightness = (byte?)c.Brightness,
+                        ColorTemperature = (int?)c.Colour
+                    };
                     client.SendCommandAsync(command, c.LightIds);
                 }
             }
@@ -180,10 +182,10 @@ namespace LightControl
     {
         Command command;
         LightController controller;
-        int remainingSteps;
+        uint remainingSteps;
         Timer rampTimer;
-        int brightnessTarget;
-        int rampDuration;
+        uint brightnessTarget;
+        uint rampDuration;
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
 
         internal Ramp(Command c, LightController controller)
@@ -196,13 +198,13 @@ namespace LightControl
                 Brightness = 1
             };
             rampDuration = c.Ramp;
-            brightnessTarget = (int)c.Brightness;
+            brightnessTarget = (uint)c.Brightness;
             this.controller = controller;
         }
         internal void StartRamp()
         {
             remainingSteps = brightnessTarget - 1;   // assuming that we've already handled case where brightness is null
-            int period = (rampDuration * 60 * 1000 - 2000) / remainingSteps;  // Not sure what the deal is with the 2 second offset, but it seems to be needed.
+            ulong period = (rampDuration * 60 * 1000 - 2000) / remainingSteps;  // Not sure what the deal is with the 2 second offset, but it seems to be needed.
             // worst case is we'll step up brightness by 253 over the course of 1 minute, which works out to
             // well over 200 ms between steps.  As long as the dispatch period is shorter than that we'll be
             // fine, but if the dispatch period is more than 200 ms (or if the minimum ramp time or brightness
@@ -260,10 +262,10 @@ namespace LightControl
             Ramp = source.Ramp;
         }
         internal LightState LightState { get; set; }    // Valid values are Off, On, or NoChange
-        internal int? Brightness { get; set; }  // Valid values are in the range 1-254, or null to leave unchanged
-        internal int? Colour { get; set; }      // In mireks, valid from 500 (=2000K) down to 153 (=6500K), or null to leave unchanged
+        internal uint? Brightness { get; set; }  // Valid values are in the range 1-254, or null to leave unchanged
+        internal uint? Colour { get; set; }      // In mireks, valid from 500 (=2000K) down to 153 (=6500K), or null to leave unchanged
         internal List<string> LightIds { get; set; }
-        internal int Ramp { get; set; } = 0;    // Brightness will ramp up from 1 to Brightness parameter over this many minutes (0 means no ramp)
+        internal uint Ramp { get; set; } = 0;    // Brightness will ramp up from 1 to Brightness parameter over this many minutes (0 means no ramp)
     }
 
     class BridgeSimulator
