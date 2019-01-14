@@ -23,10 +23,14 @@ using YamlDotNet.Serialization.NamingConventions;
  *        on: 7:00                 # Turn on at 7:00 AM (24-hour format)
  *        off: 7:15                # Turn off at 7:15 AM (24-hour format)
  *        ramp: 10                 # Ramp up brightness over 10 minutes
+ *        brightness: 254          # Brightness of the bulb, from 1 (dim) to 254 (max brightness)
+ *        colour: 350              # Colour temperature (for bulbs that support it), from 500 (2000K) to 153 (6500K)
  *      - name: Evening
  *        lights: living room
  *        days: [0, 1, 2, 3, 4, 5, 6]
  *        on: 19:00
+ *        brightness: 254
+ *        colour: 500
  *      - name: Night
  *        lights: all
  *        days: [0, 1, 2, 3, 4, 5, 6]
@@ -47,6 +51,15 @@ using YamlDotNet.Serialization.NamingConventions;
 
 namespace LightControl
 {
+    [Serializable]
+    internal class ConfigValueException : Exception
+    {
+        internal string Field { get; private set; }
+        internal object Value { get; private set; }
+        internal ConfigValueException() : base() { }
+        internal ConfigValueException(string msg) : base(msg) { }
+        internal ConfigValueException(string msg, Exception inner) : base(msg, inner) { }
+    }
     class Config
     {
         private ConfigSchema config;
@@ -62,6 +75,7 @@ namespace LightControl
             try
             {
                 config = deserializer.Deserialize<ConfigSchema>(reader);
+                Validate();
             }
             catch (YamlDotNet.Core.SyntaxErrorException)
             {
@@ -69,9 +83,45 @@ namespace LightControl
             }
         }
 
-        /// <summary>
-        /// A dictionary mapping schedule names to schedules.
-        /// </summary>
+        private void Validate()
+        {
+            if (ApiKey.Length <= 0 )
+                throw new ConfigValueException(string.Format("Invalid API key length. (ApiKey = {0})", ApiKey.Length));
+            if (DispatchPeriod < 150)
+            {
+                throw new ConfigValueException(string.Format("Dispatch period must be >150 ms. (DispatchPeriod = {0}", DispatchPeriod));
+            }
+            foreach (string key in Groups.Keys)
+            {
+                if (string.IsNullOrEmpty(key))
+                    throw new ConfigValueException(string.Format("Group key cannot be empty. (key = {0})", key));
+            }
+            foreach (List<string> group in Groups.Values)
+            {
+                foreach (string id in group)
+                {
+                    if (!UInt32.TryParse(id, out uint _))
+                    {
+                        throw new ConfigValueException(string.Format("Group members must be integers. (Value was {0})", id));
+                    }
+                }
+            }
+            foreach (Schedule s in Schedules.Values)
+            {
+                foreach (ScheduleElement element in s.Elements)
+                {
+                    if (element.Brightness != null && (element.Brightness < 1 || element.Brightness > 254))
+                        throw new ConfigValueException(string.Format("Brightness must be between 1 and 254 inclusive. (Value was {0})", element.Brightness));
+                    if (element.Colour != null && (element.Colour < 153 || element.Colour > 500))
+                        throw new ConfigValueException(string.Format("Colour must be between 153 (6500K) and 500 (2000K) inclusive. (Value was {0})", element.Colour));
+                    if (element.On == null && element.Off == null)
+                        throw new ConfigValueException(string.Format("Schedule element must specify On/Off time. (In element '{0}')", element.Name));
+                    if (!new List<string>(Groups.Keys).Contains(element.Lights))
+                        throw new ConfigValueException(string.Format("Unknown lighting group specified. (Group '{0}' in element '{1}')", element.Lights, element.Name));
+                }
+            }
+        }
+        
         internal string ApiKey => config.Apikey;
         internal int DispatchPeriod => config.Dispatchperiod;
         internal Dictionary<string, Schedule> Schedules => config.Schedules;
@@ -85,7 +135,9 @@ namespace LightControl
         public List<int> Days { get; set; }
         public DateTime? On { get; set; } = null;
         public DateTime? Off { get; set; } = null;
-        public int Ramp { get; set; } = 0;
+        public uint Ramp { get; set; } = 0;
+        public uint? Brightness { get; set; } = null;
+        public uint? Colour { get; set; } = null;
 
         public ScheduleElement() { }
         public ScheduleElement(ScheduleElement old)
@@ -96,6 +148,8 @@ namespace LightControl
             On = old.On;
             Off = old.Off;
             Ramp = old.Ramp;
+            Brightness = old.Brightness;
+            Colour = old.Colour;
         }
     }
 
@@ -126,6 +180,8 @@ namespace LightControl
                     if (newElement.Lights != null) Elements[i].Lights = newElement.Lights;
                     if (newElement.Days != null) Elements[i].Days = newElement.Days;
                     if (newElement.Ramp != 0) Elements[i].Ramp = newElement.Ramp;
+                    if (newElement.Brightness != null) Elements[i].Brightness = newElement.Brightness;
+                    if (newElement.Colour != null) Elements[i].Colour = newElement.Colour;
                     return;
                 }
             }
