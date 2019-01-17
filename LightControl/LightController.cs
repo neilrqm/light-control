@@ -266,6 +266,18 @@ namespace LightControl
         internal uint? Colour { get; set; }      // In mireks, valid from 500 (=2000K) down to 153 (=6500K), or null to leave unchanged
         internal List<string> LightIds { get; set; }
         internal uint Ramp { get; set; } = 0;    // Brightness will ramp up from 1 to Brightness parameter over this many minutes (0 means no ramp)
+
+        public override string ToString()
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.Append("Command: ");
+            sb.AppendFormat("LightState = {0}, ", LightState);
+            sb.AppendFormat("Brightness = {0}, ", Brightness);
+            sb.AppendFormat("Colour = {0}, ", Colour);
+            sb.AppendFormat("LightIds = {0}, ", LightIds.ToString());
+            sb.AppendFormat("Ramp = {0}.", Ramp);
+            return sb.ToString();
+        }
     }
 
     class BridgeSimulator
