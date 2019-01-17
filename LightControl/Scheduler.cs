@@ -134,7 +134,7 @@ namespace LightControl
             {
                 if (e.RunTime == seconds)
                 {
-                    log.InfoFormat("Triggering event on {0} - '{1}'.", e.Name, e.Command);
+                    log.InfoFormat("Triggering event on {0} - '{1}'.", e.Name, e.Command.ToString());
                     ScheduleExpired?.Invoke(this, new SchedulerEventArgs(e.Command));
                 }
                 else if (e.RunTime > seconds)
