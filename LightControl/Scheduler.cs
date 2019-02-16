@@ -67,7 +67,7 @@ namespace LightControl
 
         private async void TriggerEvent(int delay)
         {
-            log.InfoFormat("Triggering next event in {0} seconds.", delay);
+            log.InfoFormat("Triggering next event in {0} seconds ({1}).", delay, DateTime.Now.AddSeconds(delay).ToLongTimeString());
             await Task.Delay(delay * 1000);
             // process events that are supposed to run at this time
             // do we need to mark the processed events so that SecondsUntilNextRun doesn't find them?  I don't think so but maybe.
