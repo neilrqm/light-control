@@ -48,12 +48,7 @@ namespace LightControl
                         s.AddElement(e);
                     }
                 }
-                schedules[name] = new WeeklySchedule();
-                foreach (ScheduleElement e in s.Elements)
-                {
-                    schedules[name].Elements.AddRange(ConfigScheduleElementToWeeklyScheduleElement(e));
-                }
-                schedules[name].Elements.Sort();
+                schedules[name] = new WeeklySchedule(s, lightingGroups);
             }
         }
 
@@ -70,25 +65,106 @@ namespace LightControl
             TriggerEvent(SecondsUntilNextRun());
         }
 
-        private List<WeeklyScheduleElement> ConfigScheduleElementToWeeklyScheduleElement(ScheduleElement e)
+        private async void TriggerEvent(int delay)
         {
-            List<WeeklyScheduleElement> elements = new List<WeeklyScheduleElement>();
-            if (e.Days ==null)
+            log.InfoFormat("Triggering next event in {0} seconds.", delay);
+            await Task.Delay(delay * 1000);
+            // process events that are supposed to run at this time
+            // do we need to mark the processed events so that SecondsUntilNextRun doesn't find them?  I don't think so but maybe.
+            int seconds = TimeSinceStartOfWeek();
+            while (activeSchedule.Peek().RunTime <= seconds)
             {
-                // error
+                WeeklyScheduleElement e = activeSchedule.Dequeue();
+                log.InfoFormat("Triggering event on {0} - '{1}'.", e.Name, e.Command.ToString());
+                ScheduleExpired?.Invoke(this, new SchedulerEventArgs(e.Command));
+                seconds = TimeSinceStartOfWeek();
             }
-            foreach (int day in e.Days)
+            TriggerEvent(SecondsUntilNextRun());
+        }
+
+        internal List<string> Schedules
+        {
+            get
             {
-                if (e.On != null)
-                {
-                    elements.Add(CreateWeeklyScheduleElement(LightState.On, e, day));
-                }
-                if (e.Off != null)
-                {
-                    elements.Add(CreateWeeklyScheduleElement(LightState.Off, e, day));
-                }
+                return new List<string>(schedules.Keys);
             }
-            return elements;
+        }
+
+        private int SecondsUntilNextRun()
+        {
+            int currentTime = TimeSinceStartOfWeek();
+            WeeklyScheduleElement next = activeSchedule.Peek();
+            if (next.RunTime > currentTime)
+            {
+                return next.RunTime - currentTime;
+            }
+            DateTime now = DateTime.Now;
+            DateTime startOfNextWeek = now - new TimeSpan((int)now.DayOfWeek, now.Hour, now.Minute, now.Second) + new TimeSpan(7, 0, 0, 0);
+            return (int)(startOfNextWeek - now).TotalSeconds + next.RunTime;
+        }
+
+        private int TimeSinceStartOfWeek()
+        {
+            DateTime now = DateTime.Now;
+            DateTime start = now - new TimeSpan((int)now.DayOfWeek, now.Hour, now.Minute, now.Second);
+            return (int)(DateTime.Now - start).TotalSeconds;
+        }
+    }
+
+    class WeeklySchedule
+    {
+        private Schedule schedule;
+        private Dictionary<string, List<string>> lightingGroups;
+
+        private Queue<WeeklyScheduleElement> elements;
+
+        internal string Name { get; set; }
+
+        internal WeeklySchedule(Schedule s, Dictionary<string, List<string>> lightingGroups)
+        {
+            schedule = s;
+            elements = new Queue<WeeklyScheduleElement>();
+            this.lightingGroups = lightingGroups;
+            RegenerateWeeklySchedule();
+        }
+
+        internal WeeklySchedule(WeeklySchedule source)
+        {
+            Name = source.Name;
+            elements = new Queue<WeeklyScheduleElement>();
+            schedule = new Schedule(source.schedule);
+            lightingGroups = new Dictionary<string, List<string>>(lightingGroups);
+            foreach (WeeklyScheduleElement e in source.elements)
+            {
+                elements.Enqueue(new WeeklyScheduleElement(e));
+            }
+        }
+        
+        internal void Enqueue(WeeklyScheduleElement e) => elements.Enqueue(e);
+        internal WeeklyScheduleElement Dequeue()
+        {
+            if (elements.Count == 0)
+            {
+                RegenerateWeeklySchedule();
+            }
+            return elements.Dequeue();
+        }
+        internal WeeklyScheduleElement Peek()
+        {
+            if (elements.Count == 0)
+            {
+                RegenerateWeeklySchedule();
+            }
+            return elements.Peek();
+        }
+
+        private int SecondsSinceStartOfWeek(int dayOfWeek, DateTime dt)
+        {
+            int seconds = dayOfWeek * 24 * 60 * 60;
+            seconds += dt.Hour * 60 * 60;
+            seconds += dt.Minute * 60;
+            seconds += dt.Second;
+            return seconds;
         }
 
         private WeeklyScheduleElement CreateWeeklyScheduleElement(LightState state, ScheduleElement e, int day)
@@ -114,58 +190,55 @@ namespace LightControl
             return element;
         }
 
-        private int SecondsSinceStartOfWeek(int dayOfWeek, DateTime dt)
+        private List<WeeklyScheduleElement> ConfigScheduleElementToWeeklyScheduleElementList(ScheduleElement e)
         {
-            int seconds = dayOfWeek * 24 * 60 * 60;
-            seconds += dt.Hour * 60 * 60;
-            seconds += dt.Minute * 60;
-            seconds += dt.Second;
-            return seconds;
-        }
-
-        private async void TriggerEvent(int delay)
-        {
-            log.InfoFormat("Triggering next event in {0} seconds.", delay);
-            await Task.Delay(delay * 1000);
-            // process events that are supposed to run at this time
-            // do we need to mark the processed events so that SecondsUntilNextRun doesn't find them?  I don't think so but maybe.
-            int seconds = TimeSinceStartOfWeek();
-            foreach (WeeklyScheduleElement e in activeSchedule.Elements)
+            List<WeeklyScheduleElement> elementList = new List<WeeklyScheduleElement>();
+            if (e.Days == null)
             {
-                if (e.RunTime == seconds)
+                // error
+            }
+            foreach (int day in e.Days)
+            {
+                if (e.On != null)
                 {
-                    log.InfoFormat("Triggering event on {0} - '{1}'.", e.Name, e.Command.ToString());
-                    ScheduleExpired?.Invoke(this, new SchedulerEventArgs(e.Command));
+                    elementList.Add(CreateWeeklyScheduleElement(LightState.On, e, day));
                 }
-                else if (e.RunTime > seconds)
+                if (e.Off != null)
                 {
-                    break;
+                    elementList.Add(CreateWeeklyScheduleElement(LightState.Off, e, day));
                 }
             }
-            TriggerEvent(SecondsUntilNextRun());
+            return elementList;
         }
 
-        internal List<string> Schedules
+        void RegenerateWeeklySchedule()
         {
-            get
+            elements.Clear();
+            List<WeeklyScheduleElement> elementList = new List<WeeklyScheduleElement>();
+            foreach (ScheduleElement e in schedule.Elements)
             {
-                return new List<string>(schedules.Keys);
+                elementList.AddRange(ConfigScheduleElementToWeeklyScheduleElementList(e));
             }
-        }
-
-        private int SecondsUntilNextRun()
-        {
-            int currentTime = TimeSinceStartOfWeek();
-            foreach (WeeklyScheduleElement e in activeSchedule.Elements)
+            elementList.Sort();
+            if (elementList[elementList.Count - 1].RunTime < TimeSinceStartOfWeek())
             {
-                if (e.RunTime > currentTime)
+                // if there aren't any more events for this week, just add a full week's worth of elements.
+                foreach (WeeklyScheduleElement element in elementList)
                 {
-                    return e.RunTime - currentTime;
+                    elements.Enqueue(element);
                 }
             }
-            DateTime now = DateTime.Now;
-            DateTime startOfNextWeek = now - new TimeSpan((int)now.DayOfWeek, now.Hour, now.Minute, now.Second) + new TimeSpan(7, 0, 0, 0);
-            return (int)(startOfNextWeek - now).TotalSeconds;
+            else
+            {
+                // if there are more events for this week, just add those elements.
+                foreach (WeeklyScheduleElement element in elementList)
+                {
+                    if (element.RunTime > TimeSinceStartOfWeek())
+                    {
+                        elements.Enqueue(element);
+                    }
+                }
+            }
         }
 
         private int TimeSinceStartOfWeek()
@@ -174,22 +247,6 @@ namespace LightControl
             DateTime start = now - new TimeSpan((int)now.DayOfWeek, now.Hour, now.Minute, now.Second);
             return (int)(DateTime.Now - start).TotalSeconds;
         }
-    }
-
-    class WeeklySchedule
-    {
-        internal WeeklySchedule() { }
-        internal WeeklySchedule(WeeklySchedule source)
-        {
-            Name = source.Name;
-            Elements = new List<WeeklyScheduleElement>();
-            foreach (WeeklyScheduleElement e in source.Elements)
-            {
-                Elements.Add(new WeeklyScheduleElement(e));
-            }
-        }
-        internal string Name { get; set; }
-        internal List<WeeklyScheduleElement> Elements { get; set; } = new List<WeeklyScheduleElement>();
     }
 
     class WeeklyScheduleElement : IComparable
