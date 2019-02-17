@@ -70,14 +70,22 @@ namespace LightControl
             log.InfoFormat("Triggering next event in {0} seconds ({1}).", delay, DateTime.Now.AddSeconds(delay).ToLongTimeString());
             await Task.Delay(delay * 1000);
             // process events that are supposed to run at this time
-            // do we need to mark the processed events so that SecondsUntilNextRun doesn't find them?  I don't think so but maybe.
             int seconds = TimeSinceStartOfWeek();
-            while (activeSchedule.Peek().RunTime <= seconds)
+            while (activeSchedule.Peek() != null && activeSchedule.Peek().RunTime <= seconds)
             {
                 WeeklyScheduleElement e = activeSchedule.Dequeue();
                 log.InfoFormat("Triggering event on {0} - '{1}'.", e.Name, e.Command.ToString());
                 ScheduleExpired?.Invoke(this, new SchedulerEventArgs(e.Command));
                 seconds = TimeSinceStartOfWeek();
+            }
+            if (activeSchedule.Peek() == null)
+            {
+                // if there's nothing left in the schedule, wait for the week to roll over and re-generate the schedule.
+                int x = 604800 - TimeSinceStartOfWeek();  // 604800 seconds in 1 week
+                log.InfoFormat("End of week - regenerating schedule in {0} seconds.", x);
+                await Task.Delay(x * 1000);
+                activeSchedule.RegenerateWeeklySchedule();
+                // might be a bug here with the time change but I don't expect it to come up.
             }
             TriggerEvent(SecondsUntilNextRun());
         }
@@ -143,19 +151,19 @@ namespace LightControl
         internal void Enqueue(WeeklyScheduleElement e) => elements.Enqueue(e);
         internal WeeklyScheduleElement Dequeue()
         {
-            if (elements.Count == 0)
+            if (elements.Count != 0)
             {
-                RegenerateWeeklySchedule();
+                return elements.Dequeue();
             }
-            return elements.Dequeue();
+            return null;
         }
         internal WeeklyScheduleElement Peek()
         {
-            if (elements.Count == 0)
+            if (elements.Count != 0)
             {
-                RegenerateWeeklySchedule();
+                return elements.Peek();
             }
-            return elements.Peek();
+            return null;
         }
 
         private int SecondsSinceStartOfWeek(int dayOfWeek, DateTime dt)
@@ -211,7 +219,7 @@ namespace LightControl
             return elementList;
         }
 
-        void RegenerateWeeklySchedule()
+        internal void RegenerateWeeklySchedule()
         {
             elements.Clear();
             List<WeeklyScheduleElement> elementList = new List<WeeklyScheduleElement>();
